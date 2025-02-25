@@ -4,66 +4,14 @@ import json
 import signal
 import sys
 import glob
-import uuid
-import threading
-import shutil
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union, Literal
-from pydantic import BaseModel, Field, validator
+from typing import List, Dict, Any, Optional, Union
+
 from openai import OpenAI
-
-# ---- Pydantic Models ----
-
-class SuggestionItem(BaseModel):
-    """Model for a single suggestion item."""
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    text: str
-    description: Optional[str] = None
-    best_practice: Optional[str] = None
-
-class SuggestionRequest(BaseModel):
-    """Model for generating suggestions."""
-    category: Literal["project_name", "objective", "timeline", "resource", 
-                      "risk", "deliverable", "audience", "success_metric", "best_practice"]
-    question: str
-    suggestions: List[SuggestionItem]
-    allow_custom_input: bool = True
-
-class ProjectNameRequest(BaseModel):
-    """Model for generating project name suggestions."""
-    project_description: str
-    suggestions: List[SuggestionItem]
-    allow_custom_input: bool = True
-
-class SuggestionResponse(BaseModel):
-    """Model for suggestion generation response."""
-    status: str
-    rendered: bool = True
-    num_suggestions: int
-
-class ScopeData(BaseModel):
-    """Model for project scope data."""
-    scope: Dict[str, Any]
-
-class ScopeResponse(BaseModel):
-    """Model for save scope response."""
-    status: str
-    message: str
-
-class ProjectData(BaseModel):
-    """Model for project data."""
-    name: str
-    created_at: str = Field(default_factory=lambda: datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    last_modified: str = Field(default_factory=lambda: datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    status: str = "new"
-    stage: Literal["initial", "naming", "scoping", "complete"] = "initial"
-    assistant_id: Optional[str] = None
-    thread_id: Optional[str] = None
-    scope: Dict[str, Any] = Field(default_factory=dict)
-    description: Optional[str] = None
-    
-    class Config:
-        validate_assignment = True
+from models import (
+    SuggestionItem, ProjectData, InteractionRecord, InteractionHistory
+)
+from tools import ToolManager
 
 class ProgressIndicator:
     """Static progress indicator that doesn't cause blinking."""
@@ -89,7 +37,7 @@ class ProjectScopingAgent:
         """Initialize the Project Scoping Agent with OpenAI API key."""
         self.client = OpenAI(api_key=api_key or os.environ.get("OPENAI_API_KEY"))
         self.assistant = None
-        self.thread_id = None  # Store thread_id directly
+        self.thread_id = None
         self.project_name = None
         self.projects_dir = projects_dir
         self.progress = ProgressIndicator()
@@ -100,9 +48,11 @@ class ProjectScopingAgent:
         # Ensure projects directory exists
         os.makedirs(self.projects_dir, exist_ok=True)
         
-        # Store suggestions for UI rendering
-        self.current_suggestions: List[SuggestionItem] = []
-        self.current_suggestion_category: Optional[str] = None
+        # Tool manager will be initialized after thread creation
+        self.tool_manager = None
+        
+        # Track the latest interaction for recording responses
+        self.latest_interaction_index: int = -1
     
     def load_projects(self) -> List[Dict[str, str]]:
         """Load list of existing projects from the projects directory."""
@@ -129,37 +79,72 @@ class ProjectScopingAgent:
         """Present user with existing projects or option to create a new one."""
         projects = self.load_projects()
         
-        if not projects:
-            print("No existing projects found. Creating a new project.")
-            return self.create_new_project()
+        # Clear screen for better UX
+        print("\n\n" + "="*50)
+        print("   PROJECT SCOPING ASSISTANT")
+        print("="*50 + "\n")
         
-        print("\n=== Existing Projects ===")
+        if not projects:
+            print("No existing projects found.")
+            create_new = input("Would you like to create a new project? (Y/n): ").lower()
+            if create_new != "n":
+                return self.create_new_project()
+            else:
+                print("Exiting application.")
+                sys.exit(0)
+        
+        print("=== Existing Projects ===")
         for i, project in enumerate(projects, 1):
-            print(f"{i}. {project['name']} (Created: {project['created_at']}, Last modified: {project['last_modified']})")
-        print(f"{len(projects) + 1}. Create a new project")
+            # Format dates for better readability
+            created = project['created_at'].split()[0] if ' ' in project['created_at'] else project['created_at']
+            modified = project['last_modified'].split()[0] if ' ' in project['last_modified'] else project['last_modified']
+            
+            print(f"{i}. {project['name']}")
+            print(f"   Created: {created} | Last modified: {modified}")
+        
+        print(f"\n{len(projects) + 1}. Create a new project")
+        print(f"{len(projects) + 2}. Exit")
         
         while True:
             try:
-                choice = input("\nSelect a project (enter number): ")
+                choice = input("\nSelect an option (enter number): ")
                 choice_idx = int(choice) - 1
                 
                 if choice_idx == len(projects):
                     return self.create_new_project()
+                elif choice_idx == len(projects) + 1:
+                    print("Exiting application.")
+                    sys.exit(0)
                 elif 0 <= choice_idx < len(projects):
                     return self.load_project(projects[choice_idx]['file_path'])
                 else:
                     print("Invalid selection. Please try again.")
             except ValueError:
                 print("Please enter a valid number.")
-    
+            except KeyboardInterrupt:
+                print("\nExiting application.")
+                sys.exit(0)
+
     def create_new_project(self) -> bool:
-        """Initialize a new project."""
+        """Initialize a new project with a user-provided description."""
         print("\n=== Creating New Project ===")
         default_name = f"Project_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        self.project_data = ProjectData(name=default_name)
+        # Ask for project description immediately
+        print("\nPlease provide a brief description of your project:")
+        project_description = input("> ")
         
+        # Create project data with description
+        self.project_data = ProjectData(
+            name=default_name,
+            description=project_description,
+            stage="initial"
+        )
+        
+        # Set up the assistant and tools
         self.setup_assistant()
+        
+        print("\nProject initialized with description.")
         return True
     
     def check_and_cancel_active_runs(self) -> None:
@@ -199,7 +184,43 @@ class ProjectScopingAgent:
             print(f"Error checking for active runs: {e}")
         finally:
             self.progress.stop()
-    
+
+    def display_project_info(self) -> None:
+        """Display current project information in a structured format."""
+        if not self.project_data:
+            print("No project data available.")
+            return
+        
+        print("\n" + "="*50)
+        print(f"   PROJECT: {self.project_data.name}")
+        print("="*50)
+        
+        print(f"Status: {self.project_data.status}")
+        print(f"Stage: {self.project_data.stage}")
+        
+        if self.project_data.description:
+            print("\nDescription:")
+            print(f"  {self.project_data.description}")
+        
+        # Show current progress
+        if self.project_data.stage != "initial":
+            print("\nProgress:")
+            num_interactions = len(self.project_data.interaction_history.interactions)
+            print(f"  {num_interactions} questions answered")
+        
+        # Show scope summary if we have data
+        if self.project_data.scope:
+            print("\nScope Data Collected:")
+            for key, value in self.project_data.scope.items():
+                if isinstance(value, str):
+                    print(f"  {key.replace('_', ' ').title()}: {value[:50]}{'...' if len(value) > 50 else ''}")
+                else:
+                    print(f"  {key.replace('_', ' ').title()}: [Data collected]")
+        
+        print("\nCreated: " + self.project_data.created_at)
+        print("Last Modified: " + self.project_data.last_modified)
+        print("="*50 + "\n")
+
     def load_project(self, file_path: str) -> bool:
         """Load an existing project from file."""
         try:
@@ -207,7 +228,9 @@ class ProjectScopingAgent:
                 project_dict = json.load(f)
                 self.project_data = ProjectData(**project_dict)
             
-            print(f"\nLoaded project: {self.project_data.name}")
+            # Display project info after loading
+            self.display_project_info()
+            
             self.project_name = self.project_data.name
             
             # Check if we need to create a new assistant or use existing one
@@ -240,6 +263,9 @@ class ProjectScopingAgent:
                     self.progress.stop()
                     print(f"Reconnected to thread: {self.thread_id}")
                     
+                    # Initialize tool manager with the thread ID
+                    self.initialize_tool_manager()
+                    
                     # Check and cancel any active runs
                     self.check_and_cancel_active_runs()
                     
@@ -250,10 +276,12 @@ class ProjectScopingAgent:
                     thread = self.client.beta.threads.create()
                     self.thread_id = thread.id
                     self.project_data.thread_id = thread.id
+                    self.initialize_tool_manager()
             else:
                 thread = self.client.beta.threads.create()
                 self.thread_id = thread.id
                 self.project_data.thread_id = thread.id
+                self.initialize_tool_manager()
             
             # Update last modified
             self.project_data.last_modified = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -288,43 +316,55 @@ class ProjectScopingAgent:
         
         try:
             with open(file_path, 'w') as f:
-                json.dump(self.project_data.model_dump(), f, indent=2)  # Use model_dump instead of dict
+                json.dump(self.project_data.model_dump(), f, indent=2)
             print(f"Project saved to {file_path}")
         except Exception as e:
             print(f"Error saving project: {e}")
+    
+    def initialize_tool_manager(self) -> None:
+        """Initialize the tool manager with callbacks."""
+        if not self.thread_id:
+            print("Error: Thread ID not available for tool manager.")
+            return
+            
+        self.tool_manager = ToolManager(self.client, self.thread_id)
+        
+        # Set up callbacks
+        self.tool_manager.on_scope_saved = self.on_scope_saved
+        self.tool_manager.on_suggestions_generated = self.on_suggestions_generated
+        self.tool_manager.on_project_names_generated = self.on_project_names_generated
+    
+    def on_scope_saved(self, scope: Dict[str, Any]) -> None:
+        """Callback when scope is saved by the tool."""
+        if self.project_data:
+            self.project_data.scope = scope
+            self.project_data.stage = "complete"
+            self.save_project()
+    
+    def on_suggestions_generated(self, suggestions: List[SuggestionItem], category: str) -> None:
+        """Callback when suggestions are generated."""
+        # Store for later use in user input processing
+        pass  # We'll access the tool_manager's properties directly
+    
+    def on_project_names_generated(self, suggestions: List[SuggestionItem]) -> None:
+        """Callback when project name suggestions are generated."""
+        # Store for later use in user input processing
+        pass  # We'll access the tool_manager's properties directly
 
     def setup_assistant(self) -> None:
         """Create and configure the OpenAI Assistant."""
         print("Setting up Project Scoping Assistant...")
         self.progress.start("Creating assistant")
         
-        # Define the tools the assistant can use
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "save_scope",
-                    "description": "Save the final project scope document",
-                    "parameters": ScopeData.model_json_schema()
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "generate_project_names",
-                    "description": "Generate project name suggestions based on project description",
-                    "parameters": ProjectNameRequest.model_json_schema()
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "generate_suggestions",
-                    "description": "Generate structured suggestions for various project aspects",
-                    "parameters": SuggestionRequest.model_json_schema()
-                }
-            }
-        ]
+        # Create a thread if we don't have one yet
+        if not self.thread_id:
+            thread = self.client.beta.threads.create()
+            self.thread_id = thread.id
+            if self.project_data:
+                self.project_data.thread_id = self.thread_id
+        
+        # Initialize tool manager
+        self.initialize_tool_manager()
         
         # Create the assistant with specific instructions and tools
         self.assistant = self.client.beta.assistants.create(
@@ -332,13 +372,13 @@ class ProjectScopingAgent:
             instructions="""
             You are a project scoping specialist who helps users define and plan their projects through a 
             guided, step-by-step conversation. Follow this specific conversational flow:
-            
-            1. INITIAL STAGE: First, ask the user for a general description of their project. Just one simple 
-            question to understand the basic concept. Store this description for later use.
-            
-            2. NAMING STAGE: After receiving the project description, IMMEDIATELY call the generate_project_names 
-            tool with the description to suggest possible names. Don't wait for the user to ask for names - 
-            offer them right after getting the description.
+
+            1. INITIAL STAGE: The user will provide their project description in the first message. Don't
+            acknowledge the description separately - immediately proceed to the naming stage.
+
+            2. NAMING STAGE: After receiving the project description, in your VERY FIRST response, call 
+            the generate_project_names tool with the description. Do not send any separate acknowledgment 
+            message before generating names.
             
             3. SCOPING STAGE: After the user selects or provides a project name, begin the detailed scoping process 
             by asking ONE question at a time about different aspects of the project:
@@ -348,7 +388,7 @@ class ProjectScopingAgent:
             
             IMPORTANT TIMING GUIDELINES:
             - Call tools IMMEDIATELY after receiving relevant user information - don't delay
-            - Use generate_project_names immediately after receiving the initial project description
+            - Use generate_project_names immediately in your first response after receiving the initial project description
             - Use generate_suggestions immediately after asking each scoping question
             - Use save_scope at the end of the conversation to save all gathered information
             
@@ -370,7 +410,7 @@ class ProjectScopingAgent:
             
             Maintain a helpful, professional tone throughout the conversation.
             """,
-            tools=tools,
+            tools=self.tool_manager.tool_definitions,
             model="gpt-4o",
         )
         self.progress.stop()
@@ -379,32 +419,52 @@ class ProjectScopingAgent:
         # Update project data with assistant ID
         if self.project_data:
             self.project_data.assistant_id = self.assistant.id
-        
-        # Create a thread for the conversation if not already loaded
-        if not self.thread_id:
-            thread = self.client.beta.threads.create()
-            self.thread_id = thread.id
-            print(f"Thread created with ID: {self.thread_id}")
-            
-            # Update project data with thread ID
-            if self.project_data:
-                self.project_data.thread_id = self.thread_id    
-           
+
     def cleanup(self) -> None:
         """Save project data and perform cleanup operations."""
         if self.project_data:
             self.save_project()
-            
-        # No longer deleting the assistant since we want to reuse it in future sessions
-        # if self.assistant:
-        #     try:
-        #         print(f"\nCleaning up: Deleting assistant {self.assistant.id}...")
-        #         self.client.beta.assistants.delete(assistant_id=self.assistant.id)
-        #         print("Assistant deleted successfully.")
-        #     except Exception as e:
-        #         print(f"Error deleting assistant: {e}")
-        
         print("\nProject saved. Assistant will be reused in future sessions.")
+    
+    def record_assistant_question(self, question: str, category: Optional[str] = None) -> None:
+        """Record a question asked by the assistant."""
+        if not self.project_data:
+            return
+        
+        # Create a new interaction record for this question
+        interaction = InteractionRecord(
+            question=question,
+            category=category,
+            suggestions=self.tool_manager.current_suggestions.copy() if self.tool_manager and self.tool_manager.current_suggestions else []
+        )
+        
+        # Add to history
+        self.project_data.interaction_history.interactions.append(interaction)
+        self.save_project()
+        
+        # Store the latest interaction ID for when we record the response
+        self.latest_interaction_index = len(self.project_data.interaction_history.interactions) - 1
+
+    def record_user_response(self, selection_text: Optional[str] = None, 
+                            selection_id: Optional[str] = None,
+                            custom_input: Optional[str] = None,
+                            is_custom: bool = False) -> None:
+        """Record a user's response to a question."""
+        if not self.project_data or not hasattr(self, 'latest_interaction_index'):
+            return
+        
+        # Get the latest interaction
+        if self.latest_interaction_index >= 0 and self.latest_interaction_index < len(self.project_data.interaction_history.interactions):
+            interaction = self.project_data.interaction_history.interactions[self.latest_interaction_index]
+            
+            # Update with user's response
+            interaction.selection = selection_text
+            interaction.selection_id = selection_id
+            interaction.custom_input = custom_input
+            interaction.is_custom = is_custom
+            
+            # Save changes
+            self.save_project()
         
     def start_conversation(self) -> None:
         """Start the project scoping conversation with an initial message."""
@@ -435,18 +495,21 @@ class ProjectScopingAgent:
                 thread = self.client.beta.threads.create()
                 self.thread_id = thread.id
                 self.project_data.thread_id = thread.id
+                self.initialize_tool_manager()
                 self.client.beta.threads.messages.create(
                     thread_id=self.thread_id,
                     role="user",
                     content=f"We're continuing work on the project named '{self.project_data.name}'. Please continue from where we left off in the scoping process."
                 )
         else:
-            # Initial message requesting just a project description
+            # For new projects, provide the description we already collected
+            # This way the agent can immediately start suggesting names
             try:
+                project_description = self.project_data.description if self.project_data.description else "No description provided."
                 self.client.beta.threads.messages.create(
                     thread_id=self.thread_id,
                     role="user",
-                    content="I need help scoping a new project. I'd like to start by describing my project idea to you."
+                    content=f"I need help scoping a new project. Here's a description of my project idea: {project_description}"
                 )
             except Exception as e:
                 print(f"Error starting conversation: {e}")
@@ -455,10 +518,11 @@ class ProjectScopingAgent:
                 thread = self.client.beta.threads.create()
                 self.thread_id = thread.id
                 self.project_data.thread_id = thread.id
+                self.initialize_tool_manager()
                 self.client.beta.threads.messages.create(
                     thread_id=self.thread_id,
                     role="user",
-                    content="I need help scoping a new project. I'd like to start by describing my project idea to you."
+                    content=f"I need help scoping a new project. Here's a description of my project idea: {project_description}"
                 )
         
         # Process the message
@@ -490,24 +554,21 @@ class ProjectScopingAgent:
         
         print(f"\n[System] Project name updated to: '{name}'")
     
-    def handle_suggestion_selection(self, selection_id: Optional[str] = None, 
-                                    custom_input: Optional[str] = None) -> Optional[str]:
-        """Handle user selection from generated suggestions."""
-        if not self.current_suggestions:
-            return None
+    def extract_assistant_question(self, message_content: str) -> str:
+        """Extract the main question from an assistant message."""
+        # Simple extraction - get the last sentence ending with a question mark
+        sentences = message_content.split('.')
+        questions = [s.strip() + '.' for s in sentences if '?' in s]
         
-        # If user provided a selection ID, find the matching suggestion
-        if selection_id:
-            for suggestion in self.current_suggestions:
-                if suggestion.id == selection_id:
-                    return suggestion.text
+        if questions:
+            return questions[-1]  # Return the last question
         
-        # If user provided custom input, use that instead
-        if custom_input:
-            return custom_input
-            
-        return None
+        # If no question mark, just return the last sentence
+        if sentences:
+            return sentences[-1].strip() + '.'
         
+        return message_content  # Fallback
+    
     def _process_message(self) -> None:
         """Process the message and get a response from the assistant."""
         # Create a run to process the messages
@@ -536,7 +597,7 @@ class ProjectScopingAgent:
                 elif run.status == "requires_action":
                     # Handle tool calls when needed
                     self.progress.stop()
-                    self._handle_required_actions(run)
+                    self.tool_manager.handle_required_actions(run)
                     
                     # Reset the status tracking after actions
                     status_reported = set()
@@ -561,75 +622,41 @@ class ProjectScopingAgent:
                 message_content = latest_message.content[0].text.value
                 print("\nAssistant:", message_content)
                 
+                # Extract and record the question
+                question = self.extract_assistant_question(message_content)
+                self.record_assistant_question(
+                    question=question,
+                    category=self.tool_manager.current_suggestion_category if self.tool_manager else None
+                )
+                
         except Exception as e:
             self.progress.stop()
             print(f"Error processing message: {e}")
     
-    def _handle_required_actions(self, run) -> None:
-        """Handle required actions from the assistant."""
-        tool_outputs = []
-        
-        # First, analyze all the tool calls to prepare outputs
-        for tool_call in run.required_action.submit_tool_outputs.tool_calls:
-            function_name = tool_call.function.name
-            function_args = json.loads(tool_call.function.arguments)
-            
-            if function_name == "save_scope":
-                # Parse and validate the scope data
-                try:
-                    scope_data = ScopeData(**function_args)
-                    
-                    # Save the scope to the project data
-                    self.project_data.scope = scope_data.scope
-                    self.project_data.stage = "complete"
-                    self.save_project()
-                    
-                    print("\n=== PROJECT SCOPE DOCUMENT ===")
-                    print(json.dumps(scope_data.scope, indent=2))
-                    print("=== END OF SCOPE DOCUMENT ===\n")
-                    
-                    # Create and validate the response
-                    response = ScopeResponse(
-                        status="success",
-                        message="Project scope saved successfully"
-                    )
-                except Exception as e:
-                    # Handle validation error with a more graceful fallback
-                    print(f"\n[Warning] Cannot generate complete scope document yet: {e}")
-                    # Create a partial scope with what we have so far
-                    partial_scope = {
-                        "status": "in_progress",
-                        "message": "Project scoping in progress",
-                        "collected_data": self.project_data.scope or {}
-                    }
-                    # Report partial success
-                    response = ScopeResponse(
-                        status="partial",
-                        message="Progress saved, but complete scope document not available yet"
-                    )
-                    # Save what we have so far
-                    self.save_project()
-                    
-                tool_outputs.append({
-                    "tool_call_id": tool_call.id,
-                    "output": json.dumps(response.model_dump())
-                })
-
     def _process_suggestion_input(self, user_input: str) -> str:
-        """Process user input that might be selecting from suggestions."""
+        """Process user input that might be selecting from suggestions and record the selection."""
         # If no suggestions are active, just return the original input
-        if not self.current_suggestions:
+        if not self.tool_manager or not self.tool_manager.current_suggestions:
+            # Record as custom input with no suggestions
+            self.record_user_response(custom_input=user_input, is_custom=True)
             return user_input
-            
+                
         # Check if input is a number selecting from the list
         try:
             selection_idx = int(user_input) - 1
-            if 0 <= selection_idx < len(self.current_suggestions):
-                selected = self.current_suggestions[selection_idx]
+            if 0 <= selection_idx < len(self.tool_manager.current_suggestions):
+                selected = self.tool_manager.current_suggestions[selection_idx]
                 print(f"[Selected: {selected.text}]")
                 
+                # Record the selection
+                self.record_user_response(
+                    selection_text=selected.text,
+                    selection_id=selected.id,
+                    is_custom=False
+                )
+                
                 # Special handling for project name selection
-                if self.current_suggestion_category == "project_name" and not self.project_name:
+                if self.tool_manager.current_suggestion_category == "project_name" and not self.project_name:
                     # Remove quotes if present
                     project_name = selected.text.strip('"\'')
                     self.update_project_name(project_name)
@@ -637,15 +664,16 @@ class ProjectScopingAgent:
                 return selected.text
         except ValueError:
             pass
-            
+                
         # If this is a project name stage and we're processing a custom name
-        if self.current_suggestion_category == "project_name" and not self.project_name:
+        if self.tool_manager.current_suggestion_category == "project_name" and not self.project_name:
             # User may be providing a custom project name
             project_name = user_input.strip('"\'')
             if project_name:
                 self.update_project_name(project_name)
         
         # Input is not a selection number, treat as custom input
+        self.record_user_response(custom_input=user_input, is_custom=True)
         return user_input
         
     def send_message(self, message: str) -> None:
@@ -668,8 +696,8 @@ class ProjectScopingAgent:
             )
             
             # Clear current suggestions after sending a response
-            self.current_suggestions = []
-            self.current_suggestion_category = None
+            if self.tool_manager:
+                self.tool_manager.clear_suggestions()
             
             # Process the message
             self._process_message()
@@ -691,7 +719,35 @@ class ProjectScopingAgent:
                 print(f"Failed to recover: {e2}")
         
         # Save project after each interaction to preserve conversation state
-        self.save_project()    
+        self.save_project()
+    
+    def export_interaction_history(self, format: str = "json") -> Union[str, Dict]:
+        """Export the interaction history in various formats."""
+        if not self.project_data or not self.project_data.interaction_history:
+            return "No interaction history available"
+        
+        history = self.project_data.interaction_history.model_dump()
+        
+        if format.lower() == "json":
+            return json.dumps(history, indent=2)
+        elif format.lower() == "dict":
+            return history
+        elif format.lower() == "summary":
+            # Create a human-readable summary
+            summary = f"Interaction History for {self.project_data.name}:\n\n"
+            for i, interaction in enumerate(history.get('interactions', []), 1):
+                summary += f"Interaction {i}:\n"
+                summary += f"  Question: {interaction.get('question', 'N/A')}\n"
+                
+                if interaction.get('is_custom', False):
+                    summary += f"  Custom Response: {interaction.get('custom_input', 'N/A')}\n"
+                else:
+                    summary += f"  Selected: {interaction.get('selection', 'N/A')}\n"
+                
+                summary += "\n"
+            return summary
+        
+        return "Unsupported format"
 
     def run_interactive_session(self) -> None:
         """Run an interactive project scoping session."""
@@ -708,6 +764,11 @@ class ProjectScopingAgent:
                 if user_input.lower() in ["exit", "quit", "bye"]:
                     print("\n--- Project Scoping Conversation Ended ---")
                     break
+                
+                if user_input.lower() in ["history", "show history"]:
+                    print("\n--- Interaction History ---")
+                    print(self.export_interaction_history(format="summary"))
+                    continue
                     
                 self.send_message(user_input)
         except KeyboardInterrupt:
@@ -715,7 +776,7 @@ class ProjectScopingAgent:
         finally:
             # Save project data before exiting
             self.save_project()
-            # Clean up resources when done - no longer deleting the assistant
+            # Clean up resources when done
             self.cleanup()
 
 def signal_handler(sig, frame) -> None:

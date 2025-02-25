@@ -20,46 +20,66 @@ Scope Agent is an interactive tool that walks you through the process of scoping
   - Success metrics
 - **Project Management**: Create, save, and continue working on multiple projects
 - **Scope Document Generation**: Export complete project scope as a structured document
+- **Interaction History**: Track and review your responses throughout the project scoping process
 
 ## Installation
 
+### From PyPI (Recommended)
+```
+pip install scope-agent
+```
+
+### From Source
 1. Clone this repository:
    ```
-   git clone https://github.com/yourusername/scope_agent.git
+   git clone https://github.com/completetech/scope_agent.git
    cd scope_agent
    ```
 
-2. Install dependencies:
+2. Install the package:
    ```
-   pip install -r requirements.txt
-   ```
-
-3. Set up your OpenAI API key:
-   ```
-   export OPENAI_API_KEY=your_api_key_here
+   pip install -e .
    ```
 
 ## Usage
 
-Run the scope agent:
+### Running the application
+```
+scope-agent
+```
+
+Or if installed from source:
+```
+python -m main
+```
+
+### Configuration
+Configure Scope Agent by setting environment variables:
+```
+export OPENAI_API_KEY=your_api_key_here
+export SCOPE_AGENT_PROJECTS_DIR=path/to/projects
+```
+
+## Project Structure
+
+The codebase follows a modular architecture to promote maintainability and extensibility:
 
 ```
-python scope_agent.py
+scope_agent/
+├── models/           # Data models using Pydantic
+├── managers/         # Core component managers 
+├── utils/            # Utility functions and helpers
+├── config.py         # Configuration handling
+└── main.py           # Application entry point
 ```
-
-The tool will:
-1. Prompt you to select an existing project or create a new one
-2. Guide you through the project scoping process
-3. Save project data automatically after each interaction
-4. Generate a final scope document when complete
 
 ## Requirements
 
-- Python 3.7+
+- Python 3.8+
 - OpenAI API key
 - Required packages:
-  - openai
-  - pydantic
+  - openai>=1.0.0
+  - pydantic>=2.0.0
 
 ## License
 

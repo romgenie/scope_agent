@@ -1,0 +1,97 @@
+{
+  "name": "ScopeMaster",
+  "created_at": "2025-02-25 18:11:00",
+  "last_modified": "2025-02-25 18:11:34",
+  "status": "new",
+  "stage": "scoping",
+  "assistant_id": "asst_VHSVJa7kQ7ZaJ2NY6PO1QuPq",
+  "thread_id": "thread_GLSGp7ffi4vbdaDtvCNfNTGG",
+  "scope": {},
+  "description": "a project scoping application",
+  "interaction_history": {
+    "interactions": [
+      {
+        "timestamp": "2025-02-25 18:11:11",
+        "question": "Feel free to choose one of these or provide a custom name!.",
+        "category": "project_name",
+        "suggestions": [
+          {
+            "id": "fb86b0df-1b01-4ec5-8d0a-caccefc480e5",
+            "text": "ScopeMaster",
+            "description": "A masterful tool for project scoping excellence.",
+            "best_practice": null
+          },
+          {
+            "id": "3f258c55-a04e-4989-8e67-c3a465224949",
+            "text": "ProjectMap",
+            "description": "Mapping out projects with precision.",
+            "best_practice": null
+          },
+          {
+            "id": "28e50bfe-6690-4cd1-b2f9-08a2d0cabdc9",
+            "text": "ScopeBuilder",
+            "description": "Building comprehensive project scopes seamlessly.",
+            "best_practice": null
+          },
+          {
+            "id": "1b5f2544-101b-4181-bc59-c0687758b633",
+            "text": "OutlinePro",
+            "description": "Professional outlines for any project.",
+            "best_practice": null
+          },
+          {
+            "id": "f13bc79c-296f-48ef-b921-e0d74d33e1f5",
+            "text": "PlanCraft",
+            "description": "Crafting detailed project plans effortlessly.",
+            "best_practice": null
+          }
+        ],
+        "selection": "ScopeMaster",
+        "selection_id": "fb86b0df-1b01-4ec5-8d0a-caccefc480e5",
+        "custom_input": null,
+        "is_custom": false
+      },
+      {
+        "timestamp": "2025-02-25 18:11:34",
+        "question": ".",
+        "category": "objective",
+        "suggestions": [
+          {
+            "id": "684c9cf6-b54b-4595-9f03-9ddd44ceae1f",
+            "text": "Improve Planning Efficiency",
+            "description": "Enable users to create detailed project scopes quickly and efficiently.",
+            "best_practice": null
+          },
+          {
+            "id": "431722d4-d2ab-481e-888f-2c205366d92d",
+            "text": "Enhance Collaboration",
+            "description": "Facilitate better communication and collaboration among project stakeholders.",
+            "best_practice": null
+          },
+          {
+            "id": "05c9cdd3-2062-42bc-a3d1-7bc511c48780",
+            "text": "Increase Accuracy",
+            "description": "Ensure project scopes are precise and reflect true project needs.",
+            "best_practice": null
+          },
+          {
+            "id": "f2961f10-cd4a-49c6-bba3-cfc3c41e4607",
+            "text": "User-Friendly Interface",
+            "description": "Provide an intuitive interface that makes scoping easy for all users.",
+            "best_practice": null
+          },
+          {
+            "id": "8204d9a1-d88d-45be-86d5-982b017fc664",
+            "text": "Comprehensive Reporting",
+            "description": "Offer detailed reports and insights into project planning.",
+            "best_practice": null
+          }
+        ],
+        "selection": null,
+        "selection_id": null,
+        "custom_input": null,
+        "is_custom": false
+      }
+    ]
+  }
+}

@@ -90,6 +90,11 @@ class AssistantManager:
         if not self.thread_id:
             print("Error: No active thread.")
             return False
+            
+        # Check for empty content
+        if not content or content.strip() == "":
+            print("Error: Cannot send empty message.")
+            return False
         
         try:
             self.client.beta.threads.messages.create(

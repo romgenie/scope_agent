@@ -44,10 +44,11 @@ class UIManager:
             print(f"  {project.description}")
         
         # Show current progress
-        if project.stage != "initial" and project.interaction_history:
-            print("\nProgress:")
+        if project.interaction_history:
             num_interactions = len(project.interaction_history.interactions)
-            print(f"  {num_interactions} questions answered")
+            if num_interactions > 0:
+                print("\nProgress:")
+                print(f"  {num_interactions} interactions recorded")
         
         # Show scope summary if we have data
         if project.scope:
@@ -149,10 +150,18 @@ class UIManager:
         """Get input from the user with standard commands."""
         try:
             # Show context-aware prompt based on stage
-            if self.current_project and self.current_project.stage == "initial":
-                print("\nℹ️  Tell me about your project ideas and goals. I'll guide you through the scoping process.")
-            
+            if self.current_project:
+                if self.current_project.stage == "initial":
+                    print("\nℹ️  Tell me about your project ideas and goals. I'll guide you through the scoping process.")
+                elif self.current_project.stage == "scoping":
+                    print("\nℹ️  Continuing project scoping. Please respond to continue our conversation.")
+                    
             user_input = input(f"\n> ")
+            
+            # Prevent empty inputs
+            while not user_input.strip():
+                print("Empty input. Please type something or use a command.")
+                user_input = input(f"\n> ")
             
             # Handle special commands
             if user_input.lower() == "help":

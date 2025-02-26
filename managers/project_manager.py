@@ -74,6 +74,14 @@ class ProjectManager:
         self.ui_manager.current_project = project_data
         self.ui_manager.display_project_info(project_data)
         
+        # If we have interactions, set project stage to scoping
+        if (self.current_project.interaction_history and 
+            len(self.current_project.interaction_history.interactions) > 0):
+            # Fix for projects that have interactions but are still in initial stage
+            if self.current_project.stage == "initial":
+                self.current_project.stage = "scoping"
+                print(f"[System] Updated project stage to {self.current_project.stage} based on existing interactions.")
+        
         # Set up assistant with existing IDs if available
         if self.current_project.assistant_id:
             if not self.assistant_manager.get_assistant(self.current_project.assistant_id):
@@ -192,12 +200,23 @@ class ProjectManager:
         # Cancel any active runs before starting
         self.assistant_manager.cancel_active_runs()
         
-        # Different approach based on project stage
-        if self.current_project.stage in ['scoping', 'complete'] and self.current_project.name:
+        # Check for existing interactions to determine if we should be in scoping stage
+        has_interactions = (self.current_project.interaction_history and 
+                           len(self.current_project.interaction_history.interactions) > 0)
+        
+        # If project has interactions, ensure it's in scoping stage
+        if has_interactions and self.current_project.stage == "initial":
+            self.current_project.stage = "scoping"
+            print(f"[System] Updated project stage to {self.current_project.stage} based on existing interactions.")
+            self.save_project()
+        
+        # Different approach based on project stage and interactions
+        if (self.current_project.stage in ['scoping', 'complete'] and 
+            self.current_project.name):
             print(f"Continuing project: {self.current_project.name}")
             
             # Continue existing project
-            content = f"We're continuing work on the project named '{self.current_project.name}'. Please continue from where we left off in the scoping process."
+            content = f"We're continuing work on the project named '{self.current_project.name}'. Please continue from where we left off in the scoping process. Look at our previous messages to see what we've already discussed."
             if not self.assistant_manager.send_message(content):
                 print("Error sending message. Creating a new thread.")
                 # Create new thread and try again
@@ -225,6 +244,11 @@ class ProjectManager:
         """Send a user message and process it."""
         if not self.current_project:
             print("Error: No active project.")
+            return
+        
+        # Handle empty messages
+        if not message or message.strip() == "":
+            print("Error: Cannot send empty message. Please type something.")
             return
             
         # Process the message for suggestion selection

@@ -1,9 +1,9 @@
 {
   "name": "Project_20250225_192644",
   "created_at": "2025-02-25 19:26:44",
-  "last_modified": "2025-02-25 19:35:14",
+  "last_modified": "2025-02-25 20:20:28",
   "status": "new",
-  "stage": "initial",
+  "stage": "scoping",
   "assistant_id": "asst_salCXW1CQtGWqdjJ5ZOLS49q",
   "thread_id": "thread_mNiouNqS1kr53d1MAVYFZ81e",
   "scope": {},
@@ -48,6 +48,35 @@
         "selection_id": null,
         "custom_input": null,
         "is_custom": false
+      },
+      {
+        "timestamp": "2025-02-25 20:19:37",
+        "question": ".",
+        "category": "audience",
+        "suggestions": [
+          {
+            "id": "95a4a971-e208-4f2a-84e2-99f8031de614",
+            "text": "Internal team members",
+            "description": "The project is aimed at internal staff to enhance their operational capabilities.",
+            "best_practice": "Involve team leaders in the scoping process to ensure alignment with staff needs."
+          },
+          {
+            "id": "21456750-492e-4d17-9a80-dabdec025d20",
+            "text": "External clients",
+            "description": "The focus is on providing tools and processes for clients to improve their agent-related tasks.",
+            "best_practice": "Conduct client interviews to gain insights into their specific needs and preferences."
+          },
+          {
+            "id": "b999c52f-4158-4c69-b8ad-a445048c2139",
+            "text": "Both internal and external users",
+            "description": "The project benefits both internal staff and clients, improving operations across the board.",
+            "best_practice": "Balance the needs of both groups by setting distinct, yet complementary objectives."
+          }
+        ],
+        "selection": null,
+        "selection_id": null,
+        "custom_input": "2, but for clients not their agents",
+        "is_custom": true
       }
     ]
   }

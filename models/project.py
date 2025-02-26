@@ -1,7 +1,7 @@
 # models/project.py
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Union, Literal, TYPE_CHECKING, Annotated
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 if TYPE_CHECKING:
     from models.interaction import InteractionHistory
@@ -32,6 +32,15 @@ class ProjectData(BaseModel):
     def update_last_modified(self) -> None:
         """Update the last modified timestamp."""
         self.last_modified = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
+    def update_stage_from_interactions(self) -> None:
+        """Update stage based on interaction history."""
+        if self.interaction_history and len(self.interaction_history.interactions) > 0:
+            # If we have any interactions, ensure we're at least in scoping stage
+            if self.stage == "initial":
+                self.stage = "scoping"
+                return True
+        return False
 
 from models.interaction import InteractionHistory
 ProjectData.model_rebuild()

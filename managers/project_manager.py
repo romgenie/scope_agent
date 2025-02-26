@@ -1,32 +1,37 @@
 # managers/project_manager.py
 import logging
-from typing import List, Dict, Any, Optional, Callable, Union, Type
+import sys
+import signal
+from typing import Any, Optional
 
-from models.project import ProjectData
-from models.interaction import InteractionRecord
-from models.suggestions import SuggestionItem
+from openai import OpenAI
 
-from managers.assistant_manager import AssistantManager
+from utils.event_bus import EventBus
 from managers.data_manager import DataManager
-from managers.tool_manager import ToolManager
 from managers.ui_manager import UIManager
-from managers.conversation_manager import ConversationManager
+from managers.assistant_manager import AssistantManager
+from managers.project_lifecycle_manager import ProjectLifecycleManager
+from managers.conversation_flow import ConversationFlow
+from managers.tool_coordinator import ToolCoordinator
+from managers.ui_coordinator import UICoordinator
 from managers.interaction_recorder import InteractionRecorder
 
 # Configure logger
 logger = logging.getLogger(__name__)
 
 class ProjectManager:
-    """Orchestrates the overall project workflow and manages component interactions."""
+    """
+    Orchestrates the overall project workflow by coordinating specialized managers.
+    
+    This class has been refactored to act as a high-level coordinator that delegates
+    specific responsibilities to specialized manager classes.
+    """
     
     def __init__(
         self, 
-        api_client: Any, 
+        api_client: OpenAI, 
         ui_manager: UIManager, 
-        data_manager: DataManager,
-        assistant_manager: Optional[AssistantManager] = None,
-        conversation_manager: Optional[ConversationManager] = None,
-        interaction_recorder: Optional[InteractionRecorder] = None
+        data_manager: DataManager
     ):
         """
         Initialize the project manager with required components.
@@ -35,208 +40,418 @@ class ProjectManager:
             api_client: API client for OpenAI
             ui_manager: Manager for UI interactions
             data_manager: Manager for data persistence
-            assistant_manager: Optional manager for assistant interactions (created if None)
-            conversation_manager: Optional manager for conversation flow (created if None)
-            interaction_recorder: Optional recorder for interactions (created if None)
         """
-        # Core dependencies
+        # Create event bus for communication between components
+        self.event_bus = EventBus()
+        
+        # Set up signal handler for Ctrl+C
+        signal.signal(signal.SIGINT, self._signal_handler)
+        
+        # Create core managers
+        self.assistant_manager = AssistantManager(api_client)
+        self.interaction_recorder = InteractionRecorder()
+        self.lifecycle_manager = ProjectLifecycleManager(data_manager, self.event_bus)
+        
+        # Create specialized coordinators
+        self.tool_coordinator = ToolCoordinator(api_client, self.event_bus)
+        self.ui_coordinator = UICoordinator(ui_manager, self.event_bus)
+        self.conversation_flow = ConversationFlow(
+            self.assistant_manager,
+            self.tool_coordinator,
+            self.interaction_recorder,
+            self.event_bus
+        )
+        
+        # Set up event listeners
+        self._setup_event_listeners()
+        
+        # Store main components for access
         self.api_client = api_client
         self.ui_manager = ui_manager
         self.data_manager = data_manager
-        
-        # Create or use provided components
-        self.assistant_manager = assistant_manager or AssistantManager(api_client)
-        self.tool_manager = None
-        
-        # State tracking
-        self.current_project: Optional[ProjectData] = None
-        
-        # Set up specialized components
-        self.interaction_recorder = interaction_recorder or InteractionRecorder()
-        self._setup_conversation_manager(conversation_manager)
-        
-        # Set up UI callbacks
-        self._setup_callbacks()
     
-    # -------------------------------------------------------------------------
-    # INITIALIZATION AND SETUP
-    # -------------------------------------------------------------------------
+    def _signal_handler(self, sig, frame) -> None:
+        """Handle keyboard interrupts gracefully."""
+        logger.info("Keyboard interrupt detected")
+        print("\n\nKeyboard interrupt detected. Cleaning up...")
+        self.cleanup()
+        print("Exiting...")
+        sys.exit(0)
     
-    def _setup_conversation_manager(self, conversation_manager: Optional[ConversationManager]) -> None:
-        """Set up the conversation manager component."""
-        if conversation_manager:
-            self.conversation_manager = conversation_manager
-        else:
-            # Will be fully initialized after tool_manager is created
-            self.conversation_manager = ConversationManager(
-                assistant_manager=self.assistant_manager,
-                tool_manager=None,
-                interaction_recorder=self.interaction_recorder
-            )
-    
-    def _setup_callbacks(self) -> None:
-        """Set up callbacks for all components."""
-        # Set up UI callbacks
-        self.ui_manager.on_project_selected = self.load_project
-        self.ui_manager.on_new_project = self.create_new_project
-        self.ui_manager.on_message_sent = self.send_message
-        self.ui_manager.on_exit = self.cleanup
+    def _setup_event_listeners(self) -> None:
+        """Set up event listeners for inter-component communication."""
+        # Project lifecycle events
+        self.event_bus.register("project_created", self._on_project_created)
+        self.event_bus.register("project_loaded", self._on_project_loaded)
+        self.event_bus.register("project_saved", self._on_project_saved)
+        self.event_bus.register("project_updated", self._on_project_updated)
         
-        # Set up assistant manager callbacks
-        self.assistant_manager.on_message_received = self.handle_assistant_message
-        self.assistant_manager.on_run_completed = self.handle_run_completed
+        # Project selection events
+        self.event_bus.register("new_project_requested", self._on_new_project_requested)
+        self.event_bus.register("project_file_selected", self._on_project_file_selected)
+        self.event_bus.register("project_name_selected", self._on_project_name_selected)
+        
+        # Conversation events
+        self.event_bus.register("message_sent", self._on_message_sent)
+        self.event_bus.register("assistant_message", self._on_assistant_message)
+        self.event_bus.register("run_completed", self._on_run_completed)
+        
+        # Tool events
+        self.event_bus.register("thread_created", self._on_thread_created)
+        self.event_bus.register("suggestions_generated", self._on_suggestions_generated)
+        self.event_bus.register("project_names_generated", self._on_project_names_generated)
+        self.event_bus.register("scope_saved", self._on_scope_saved)
+        
+        # UI events
+        self.event_bus.register("user_input", self._on_user_input)
+        self.event_bus.register("exit_requested", self._on_exit_requested)
+        
+        # Current project request
+        self.event_bus.register("get_current_project", self._on_get_current_project)
     
     def initialize(self) -> None:
         """Initialize the application and present project selection."""
         logger.info("Initializing Project Manager")
-        self.ui_manager.display_welcome()
         
         try:
-            projects = self.data_manager.load_projects_list()
-            self.ui_manager.display_projects_list(projects)
-            self.ui_manager.select_project_prompt(projects)
+            # Display welcome message
+            self.ui_coordinator.display_welcome()
             
-            if self.current_project:
-                self.start_conversation()
+            # Load and display projects list
+            projects = self.data_manager.load_projects_list()
+            self.ui_coordinator.display_projects_list(projects)
+            
+            # Let UI coordinator handle project selection
+            self.ui_coordinator.handle_project_selection(projects)
+            
+            # Interactive loop is started by project selection
         except Exception as e:
             logger.error(f"Error initializing project manager: {e}")
             print(f"An error occurred during initialization: {e}")
     
-    # -------------------------------------------------------------------------
-    # PROJECT LIFECYCLE
-    # -------------------------------------------------------------------------
-    
-    def create_new_project(self, description: str) -> None:
-        """
-        Create a new project with the given description.
-        
-        Args:
-            description: User-provided project description
-        """
-        from datetime import datetime
-        
-        try:
-            logger.info(f"Creating new project with description: {description}")
-            
-            # Create default project name
-            default_name = f"Project_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            
-            # Create project data
-            self.current_project = ProjectData(
-                name=default_name,
-                description=description,
-                stage="initial"
-            )
-            
-            # Update UI manager with current project
-            self.ui_manager.current_project = self.current_project
-            
-            # Set up assistant and start conversation
-            self.setup_assistant()
-            self.start_conversation()
-        except Exception as e:
-            logger.error(f"Error creating new project: {e}")
-            print(f"An error occurred while creating the project: {e}")
-    
-    def load_project(self, file_path: str) -> None:
-        """
-        Load an existing project from file.
-        
-        Args:
-            file_path: Path to the project file
-        """
-        try:
-            logger.info(f"Loading project from: {file_path}")
-            project_data = self.data_manager.load_project(file_path)
-            
-            if not project_data:
-                logger.warning("Failed to load project. Creating a new one instead.")
-                print("Error loading project. Creating a new one instead.")
-                self.create_new_project("No description provided.")
-                return
-            
-            self.current_project = project_data
-            self.ui_manager.current_project = project_data
-            self.ui_manager.display_project_info(project_data)
-            
-            self._setup_project_components()
-            self.save_project()  # Save to ensure all IDs are updated
-        except Exception as e:
-            logger.error(f"Error loading project: {e}")
-            print(f"An error occurred while loading the project: {e}")
-    
-    def _setup_project_components(self) -> None:
-        """Set up assistant and thread for an existing project."""
-        # Set up assistant with existing ID if available
-        if self.current_project.assistant_id:
-            if not self.assistant_manager.get_assistant(self.current_project.assistant_id):
-                logger.warning("Could not retrieve existing assistant. Creating a new one.")
-                print("Could not retrieve existing assistant. Creating a new one.")
-                self.setup_assistant()
-        else:
-            self.setup_assistant()
-        
-        # Set up thread
-        if self.current_project.thread_id:
-            if not self.assistant_manager.get_thread(self.current_project.thread_id):
-                logger.warning("Could not retrieve existing thread. Creating a new one.")
-                print("Could not retrieve existing thread. Creating a new one.")
-                thread_id = self.assistant_manager.create_thread()
-                self.current_project.thread_id = thread_id
-        else:
-            thread_id = self.assistant_manager.create_thread()
-            self.current_project.thread_id = thread_id
-        
-        # Initialize tool manager with thread
-        self.initialize_tool_manager()
-        
-        # Cancel any active runs
-        self.assistant_manager.cancel_active_runs()
-    
-    def save_project(self) -> None:
-        """Save current project data to file."""
-        if not self.current_project:
-            logger.warning("Attempted to save project, but no project is active")
-            return
-        
-        try:
-            logger.debug("Saving project")
-            # Update IDs from managers
-            if self.assistant_manager.assistant:
-                self.current_project.assistant_id = self.assistant_manager.assistant.id
-            
-            if self.assistant_manager.thread_id:
-                self.current_project.thread_id = self.assistant_manager.thread_id
-            
-            # Save to file
-            file_path = self.data_manager.save_project(self.current_project)
-            if file_path:
-                logger.debug(f"Project saved to {file_path}")
-            else:
-                logger.error("Failed to save project")
-        except Exception as e:
-            logger.error(f"Error saving project: {e}")
-            print(f"Error saving project: {e}")
-    
     def cleanup(self) -> None:
         """Clean up resources before exiting."""
+        logger.info("Cleaning up resources")
+        
         try:
-            logger.info("Cleaning up resources")
-            if self.current_project:
-                self.save_project()
+            # Save current project if one exists
+            if self.lifecycle_manager.get_current_project():
+                self.lifecycle_manager.save_project()
+                
             print("\nProject saved. Assistant will be reused in future sessions.")
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
     
     # -------------------------------------------------------------------------
-    # ASSISTANT MANAGEMENT
+    # Project Lifecycle Event Handlers
     # -------------------------------------------------------------------------
     
-    def setup_assistant(self) -> None:
-        """Set up the assistant with appropriate instructions and tools."""
-        logger.info("Setting up assistant")
+    def _on_project_created(self, project) -> None:
+        """
+        Handle project created event.
         
-        instructions = """
+        Args:
+            project: The created project
+        """
+        self.ui_coordinator.update_current_project(project)
+        
+        # Set up assistant
+        assistant_id = self.assistant_manager.create_assistant(
+            name="Project Scoping Assistant",
+            instructions=self._get_assistant_instructions(),
+            tools=self.tool_coordinator.tool_definitions,
+            model="gpt-4o"
+        )
+        
+        # Update project
+        if assistant_id:
+            self.lifecycle_manager.update_project_metadata("assistant_id", assistant_id)
+        
+        # Create thread
+        thread_id = self.assistant_manager.create_thread()
+        if thread_id:
+            self.lifecycle_manager.update_project_metadata("thread_id", thread_id)
+            self.tool_coordinator.set_thread_id(thread_id)
+        
+        # Start conversation
+        self.conversation_flow.start_conversation(project)
+        
+        # Start interactive loop
+        self.ui_coordinator.handle_user_input()
+    
+    def _on_project_loaded(self, project) -> None:
+        """
+        Handle project loaded event.
+        
+        Args:
+            project: The loaded project
+        """
+        self.ui_coordinator.update_current_project(project)
+        self.ui_coordinator.display_project_info(project)
+        
+        # Set up assistant with existing ID if available
+        if project.assistant_id:
+            if not self.assistant_manager.get_assistant(project.assistant_id):
+                logger.warning("Could not retrieve existing assistant. Creating a new one.")
+                print("Could not retrieve existing assistant. Creating a new one.")
+                
+                assistant_id = self.assistant_manager.create_assistant(
+                    name="Project Scoping Assistant",
+                    instructions=self._get_assistant_instructions(),
+                    tools=self.tool_coordinator.tool_definitions,
+                    model="gpt-4o"
+                )
+                
+                if assistant_id:
+                    self.lifecycle_manager.update_project_metadata("assistant_id", assistant_id)
+        else:
+            assistant_id = self.assistant_manager.create_assistant(
+                name="Project Scoping Assistant",
+                instructions=self._get_assistant_instructions(),
+                tools=self.tool_coordinator.tool_definitions,
+                model="gpt-4o"
+            )
+            
+            if assistant_id:
+                self.lifecycle_manager.update_project_metadata("assistant_id", assistant_id)
+        
+        # Set up thread
+        if project.thread_id:
+            if not self.assistant_manager.get_thread(project.thread_id):
+                logger.warning("Could not retrieve existing thread. Creating a new one.")
+                print("Could not retrieve existing thread. Creating a new one.")
+                
+                thread_id = self.assistant_manager.create_thread()
+                if thread_id:
+                    self.lifecycle_manager.update_project_metadata("thread_id", thread_id)
+                    self.tool_coordinator.set_thread_id(thread_id)
+        else:
+            thread_id = self.assistant_manager.create_thread()
+            if thread_id:
+                self.lifecycle_manager.update_project_metadata("thread_id", thread_id)
+                self.tool_coordinator.set_thread_id(thread_id)
+        
+        # Initialize tools
+        self.tool_coordinator.initialize_tools(project.thread_id)
+        
+        # Cancel any active runs
+        self.assistant_manager.cancel_active_runs()
+        
+        # Start conversation
+        self.conversation_flow.start_conversation(project)
+        
+        # Start interactive loop
+        self.ui_coordinator.handle_user_input()
+    
+    def _on_project_saved(self, project) -> None:
+        """
+        Handle project saved event.
+        
+        Args:
+            project: The saved project
+        """
+        logger.debug("Project saved successfully")
+    
+    def _on_project_updated(self, update_data) -> None:
+        """
+        Handle project updated event.
+        
+        Args:
+            update_data: Dictionary with project and updated field
+        """
+        project = update_data["project"]
+        updated_field = update_data["updated_field"]
+        
+        logger.debug(f"Project updated: {updated_field}")
+        
+        # Handle specific updates
+        if updated_field == "name":
+            print(f"\n[System] Project name updated to: '{project.name}'")
+        elif updated_field == "stage" and project.stage == "complete":
+            print(f"\n[System] Project marked as complete")
+    
+    # -------------------------------------------------------------------------
+    # Project Selection Event Handlers
+    # -------------------------------------------------------------------------
+    
+    def _on_new_project_requested(self, description) -> None:
+        """
+        Handle new project requested event.
+        
+        Args:
+            description: Description of the new project
+        """
+        self.lifecycle_manager.create_new_project(description)
+    
+    def _on_project_file_selected(self, file_path) -> None:
+        """
+        Handle project file selected event.
+        
+        Args:
+            file_path: Path to the selected project file
+        """
+        self.lifecycle_manager.load_project(file_path)
+    
+    def _on_project_name_selected(self, name_data) -> None:
+        """
+        Handle project name selected event.
+        
+        Args:
+            name_data: Dictionary with name and project
+        """
+        name = name_data["name"]
+        project = name_data["project"]
+        
+        self.lifecycle_manager.update_project_metadata("name", name)
+        self.lifecycle_manager.update_project_metadata("stage", "scoping")
+    
+    # -------------------------------------------------------------------------
+    # Conversation Event Handlers
+    # -------------------------------------------------------------------------
+    
+    def _on_message_sent(self, message_data) -> None:
+        """
+        Handle message sent event.
+        
+        Args:
+            message_data: Dictionary with message and project
+        """
+        # Save project after message sent
+        self.lifecycle_manager.save_project()
+        
+        # Run the assistant
+        self.assistant_manager.run_assistant(self.tool_coordinator.handle_required_actions)
+    
+    def _on_assistant_message(self, message) -> None:
+        """
+        Handle assistant message event.
+        
+        Args:
+            message: The assistant's message
+        """
+        # Update current project with assistant message
+        project = self.lifecycle_manager.get_current_project()
+        if project:
+            # Conversation flow will handle recording the question
+            self.conversation_flow.set_current_project(project)
+            
+            # Save project after receiving message
+            self.lifecycle_manager.save_project()
+    
+    def _on_run_completed(self, run) -> None:
+        """
+        Handle run completed event.
+        
+        Args:
+            run: The completed run
+        """
+        logger.debug(f"Run completed: {run.id}")
+    
+    # -------------------------------------------------------------------------
+    # Tool Event Handlers
+    # -------------------------------------------------------------------------
+    
+    def _on_thread_created(self, thread_id) -> None:
+        """
+        Handle thread created event.
+        
+        Args:
+            thread_id: The created thread ID
+        """
+        project = self.lifecycle_manager.get_current_project()
+        if project:
+            self.lifecycle_manager.update_project_metadata("thread_id", thread_id)
+            self.tool_coordinator.set_thread_id(thread_id)
+    
+    def _on_suggestions_generated(self, suggestion_data) -> None:
+        """
+        Handle suggestions generated event.
+        
+        Args:
+            suggestion_data: Dictionary with suggestions and category
+        """
+        suggestions = suggestion_data["suggestions"]
+        category = suggestion_data["category"]
+        allow_custom = suggestion_data.get("allow_custom", True)
+        
+        self.ui_coordinator.display_suggestions(suggestions, category, allow_custom)
+    
+    def _on_project_names_generated(self, name_data) -> None:
+        """
+        Handle project names generated event.
+        
+        Args:
+            name_data: Dictionary with suggestions
+        """
+        suggestions = name_data["suggestions"]
+        allow_custom = name_data.get("allow_custom", True)
+        
+        self.ui_coordinator.display_suggestions(suggestions, "project_name", allow_custom)
+    
+    def _on_scope_saved(self, scope_data) -> None:
+        """
+        Handle scope saved event.
+        
+        Args:
+            scope_data: The saved scope data
+        """
+        project = self.lifecycle_manager.get_current_project()
+        if project:
+            self.lifecycle_manager.update_project_metadata("scope", scope_data)
+            self.lifecycle_manager.update_project_metadata("stage", "complete")
+            self.lifecycle_manager.save_project()
+    
+    # -------------------------------------------------------------------------
+    # UI Event Handlers
+    # -------------------------------------------------------------------------
+    
+    def _on_user_input(self, input_data) -> None:
+        """
+        Handle user input event.
+        
+        Args:
+            input_data: Dictionary with message and project
+        """
+        message = input_data["message"]
+        project = input_data["project"]
+        
+        if not message or not project:
+            return
+            
+        self.conversation_flow.process_message(message, project)
+    
+    def _on_exit_requested(self, _) -> None:
+        """
+        Handle exit requested event.
+        
+        Args:
+            _: Unused parameter
+        """
+        self.cleanup()
+    
+    def _on_get_current_project(self, _) -> None:
+        """
+        Handle get current project event.
+        
+        Args:
+            _: Unused parameter
+        """
+        project = self.lifecycle_manager.get_current_project()
+        if project and self.conversation_flow:
+            self.conversation_flow.set_current_project(project)
+    
+    # -------------------------------------------------------------------------
+    # Helper Methods
+    # -------------------------------------------------------------------------
+    
+    def _get_assistant_instructions(self) -> str:
+        """
+        Get the instructions for the assistant.
+        
+        Returns:
+            Instructions string
+        """
+        return """
         You are a project scoping specialist who helps users define and plan their projects through a 
         guided, step-by-step conversation. Follow this specific conversational flow:
 
@@ -277,312 +492,3 @@ class ProjectManager:
         
         Maintain a helpful, professional tone throughout the conversation.
         """
-        
-        try:
-            # Create thread if needed
-            if not self.assistant_manager.thread_id:
-                thread_id = self.assistant_manager.create_thread()
-                if self.current_project:
-                    self.current_project.thread_id = thread_id
-            
-            # Initialize tool manager
-            self.initialize_tool_manager()
-            
-            # Create assistant
-            assistant_id = self.assistant_manager.create_assistant(
-                name="Project Scoping Assistant",
-                instructions=instructions,
-                tools=self.tool_manager.tool_definitions,
-                model="gpt-4o"
-            )
-            
-            if self.current_project:
-                self.current_project.assistant_id = assistant_id
-        except Exception as e:
-            logger.error(f"Error setting up assistant: {e}")
-            print(f"Error setting up assistant: {e}")
-    
-    def initialize_tool_manager(self) -> None:
-        """Initialize the tool manager and set up callbacks."""
-        logger.info("Initializing tool manager")
-        
-        if not self.assistant_manager.thread_id:
-            logger.error("Thread ID not available for tool manager")
-            print("Error: Thread ID not available for tool manager.")
-            return
-        
-        try:
-            self.tool_manager = ToolManager(
-                self.api_client,
-                self.assistant_manager.thread_id
-            )
-            
-            # Set up callbacks
-            self.tool_manager.on_scope_saved = self.handle_scope_saved
-            self.tool_manager.on_suggestions_generated = self.handle_suggestions_generated
-            self.tool_manager.on_project_names_generated = self.handle_project_names_generated
-            
-            # Update conversation manager with tool manager
-            self.conversation_manager.tool_manager = self.tool_manager
-        except Exception as e:
-            logger.error(f"Error initializing tool manager: {e}")
-            print(f"Error initializing tool manager: {e}")
-    
-    # -------------------------------------------------------------------------
-    # CONVERSATION HANDLING
-    # -------------------------------------------------------------------------
-    
-    def start_conversation(self) -> None:
-        """Start or continue the project scoping conversation."""
-        if not self.current_project:
-            logger.error("Cannot start conversation: No active project")
-            print("Error: No active project.")
-            return
-        
-        logger.info("Starting project scoping conversation")
-        print("\n--- Project Scoping Conversation Started ---")
-        
-        try:
-            # Cancel any active runs before starting
-            self.assistant_manager.cancel_active_runs()
-            
-            if self._is_continuing_project():
-                self._continue_existing_project()
-            else:
-                self._start_new_project()
-            
-            # Start interactive loop
-            self.interactive_loop()
-        except Exception as e:
-            logger.error(f"Error starting conversation: {e}")
-            print(f"Error starting conversation: {e}")
-    
-    def _is_continuing_project(self) -> bool:
-        """Check if we're continuing an existing project."""
-        return (self.current_project.stage in ['scoping', 'complete'] and 
-                self.current_project.name)
-    
-    def _continue_existing_project(self) -> None:
-        """Continue an existing project conversation."""
-        logger.info(f"Continuing project: {self.current_project.name}")
-        print(f"Continuing project: {self.current_project.name}")
-        
-        content = f"We're continuing work on the project named '{self.current_project.name}'. Please continue from where we left off in the scoping process."
-        self._send_initial_message(content)
-    
-    def _start_new_project(self) -> None:
-        """Start a new project conversation."""
-        description = self.current_project.description if self.current_project.description else "No description provided."
-        logger.info(f"Starting new project with description: {description}")
-        
-        content = f"I need help scoping a new project. Here's a description of my project idea: {description}"
-        self._send_initial_message(content)
-    
-    def _send_initial_message(self, content: str) -> None:
-        """Send the initial message and handle potential failures."""
-        if not self.assistant_manager.send_message(content):
-            logger.warning("Error sending message. Creating a new thread.")
-            print("Error sending message. Creating a new thread.")
-            
-            # Create new thread and try again
-            thread_id = self.assistant_manager.create_thread()
-            self.current_project.thread_id = thread_id
-            self.initialize_tool_manager()
-            
-            if not self.assistant_manager.send_message(content):
-                logger.error("Failed to send initial message after retry")
-                print("Failed to send initial message. Please try again.")
-    
-    def send_message(self, message: str) -> None:
-        """
-        Send a user message and process it.
-        
-        Args:
-            message: User input message
-        """
-        if not self.current_project:
-            logger.error("Cannot send message: No active project")
-            print("Error: No active project.")
-            return
-        
-        try:
-            logger.debug(f"Processing user message: {message}")
-            
-            # Process the message through conversation manager
-            processed_message = self.conversation_manager.process_message(
-                message, self.current_project)
-            
-            # Send to assistant
-            if not self.assistant_manager.send_message(processed_message):
-                # Try recovery by cancelling runs
-                logger.warning("Send failed. Attempting recovery by cancelling runs.")
-                self.assistant_manager.cancel_active_runs()
-                
-                if not self.assistant_manager.send_message(processed_message):
-                    logger.error("Failed to send message even after recovery attempt")
-                    print("Failed to send message. Please try again.")
-                    return
-            
-            # Clear suggestions after sending
-            if self.tool_manager:
-                self.tool_manager.clear_suggestions()
-            
-            # Save after each interaction
-            self.save_project()
-            
-            # Run the assistant to process the message
-            self.assistant_manager.run_assistant(self.tool_manager.handle_required_actions)
-        except Exception as e:
-            logger.error(f"Error sending message: {e}")
-            print(f"Error processing your message: {e}")
-    
-    def interactive_loop(self) -> None:
-        """Run the interactive conversation loop."""
-        try:
-            while True:
-                user_input = self.ui_manager.get_user_input()
-                
-                if user_input in ["exit", "save"]:
-                    break
-                elif user_input == "history":
-                    # Already displayed by UI manager
-                    continue
-                
-                # The actual message sending is handled by the UI manager's callback
-                # which calls our send_message method
-                
-        except Exception as e:
-            logger.error(f"Error in interactive loop: {e}")
-            print(f"Error during conversation: {e}")
-        finally:
-            self.cleanup()
-    
-    # -------------------------------------------------------------------------
-    # EVENT HANDLERS
-    # -------------------------------------------------------------------------
-    
-    def handle_assistant_message(self, message: str) -> None:
-        """
-        Handle a message received from the assistant.
-        
-        Args:
-            message: Assistant message content
-        """
-        if not self.current_project:
-            logger.warning("Received assistant message but no project is active")
-            return
-        
-        try:
-            # Extract and record the question
-            question = self._extract_assistant_question(message)
-            current_category = self.tool_manager.current_suggestion_category if self.tool_manager else None
-            
-            # Record via interaction recorder
-            self.interaction_recorder.record_question(
-                self.current_project,
-                question,
-                current_category,
-                self.tool_manager.current_suggestions.copy() if self.tool_manager else []
-            )
-            
-            # Save project
-            self.save_project()
-        except Exception as e:
-            logger.error(f"Error handling assistant message: {e}")
-    
-    def _extract_assistant_question(self, message: str) -> str:
-        """
-        Extract the main question from an assistant message.
-        
-        Args:
-            message: Full message from assistant
-            
-        Returns:
-            Extracted question or last sentence
-        """
-        # Simple extraction - get the last sentence ending with a question mark
-        sentences = message.split('.')
-        questions = [s.strip() + '.' for s in sentences if '?' in s]
-        
-        if questions:
-            return questions[-1]  # Return the last question
-        
-        # If no question mark, just return the last sentence
-        if sentences:
-            return sentences[-1].strip() + '.'
-        
-        return message  # Fallback
-    
-    def handle_run_completed(self, run: Any) -> None:
-        """
-        Handle when an assistant run is completed.
-        
-        Args:
-            run: Run object from Assistant API
-        """
-        # Could log run information or update project status
-        logger.debug(f"Assistant run completed: {run.id}")
-    
-    def handle_scope_saved(self, scope: Dict[str, Any]) -> None:
-        """
-        Handle when scope is saved from the tool manager.
-        
-        Args:
-            scope: Scope data dictionary
-        """
-        if self.current_project:
-            logger.info("Project scope document saved")
-            self.current_project.scope = scope
-            self.current_project.stage = "complete"
-            self.save_project()
-    
-    def handle_suggestions_generated(self, suggestions: List[SuggestionItem], category: str) -> None:
-        """
-        Handle when suggestions are generated by the tool manager.
-        
-        Args:
-            suggestions: List of suggestion items
-            category: Category of suggestions
-        """
-        # UI display is handled by tool manager directly
-        logger.debug(f"Suggestions generated for category: {category}")
-    
-    def handle_project_names_generated(self, suggestions: List[SuggestionItem]) -> None:
-        """
-        Handle when project name suggestions are generated.
-        
-        Args:
-            suggestions: List of name suggestions
-        """
-        # UI display is handled by tool manager directly
-        logger.debug("Project name suggestions generated")
-    
-    def update_project_name(self, name: str) -> None:
-        """
-        Update the project name and save changes.
-        
-        Args:
-            name: New project name
-        """
-        if not self.current_project:
-            logger.warning("Cannot update project name: No active project")
-            return
-        
-        try:
-            # Handle rename with file update
-            old_name = self.current_project.name
-            if old_name and old_name != name:
-                self.data_manager.delete_project_file(old_name)
-            
-            # Update project
-            self.current_project.name = name
-            self.current_project.stage = "scoping"
-            
-            # Save with new name
-            self.save_project()
-            
-            logger.info(f"Project name updated to: '{name}'")
-            print(f"\n[System] Project name updated to: '{name}'")
-        except Exception as e:
-            logger.error(f"Error updating project name: {e}")
-            print(f"Error updating project name: {e}")

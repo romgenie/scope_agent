@@ -1,7 +1,7 @@
 {
   "name": "Project_20250225_192644",
   "created_at": "2025-02-25 19:26:44",
-  "last_modified": "2025-02-25 20:20:28",
+  "last_modified": "2025-02-25 20:21:51",
   "status": "new",
   "stage": "scoping",
   "assistant_id": "asst_salCXW1CQtGWqdjJ5ZOLS49q",
@@ -77,6 +77,35 @@
         "selection_id": null,
         "custom_input": "2, but for clients not their agents",
         "is_custom": true
+      },
+      {
+        "timestamp": "2025-02-25 20:21:51",
+        "question": ".",
+        "category": "deliverable",
+        "suggestions": [
+          {
+            "id": "b24afa92-6791-469d-a706-ebc7565282b6",
+            "text": "Customized Agent Scoping Software",
+            "description": "Develop personalized software solutions tailored to each client's specific needs.",
+            "best_practice": "Conduct thorough needs assessments with clients before development."
+          },
+          {
+            "id": "d0f780a7-c205-4941-9403-a14da32a25dc",
+            "text": "Comprehensive Training Program",
+            "description": "Create a training program that equips clients with the skills to effectively use the new tools.",
+            "best_practice": "Ensure the training is practical and relates directly to client workflows."
+          },
+          {
+            "id": "56a49725-71a1-43f3-830f-889e38fdcb14",
+            "text": "Ongoing Support and Maintenance Plan",
+            "description": "Provide continuous support and regular updates to ensure client success.",
+            "best_practice": "Establish a dedicated support team to address client queries and issues."
+          }
+        ],
+        "selection": null,
+        "selection_id": null,
+        "custom_input": null,
+        "is_custom": false
       }
     ]
   }

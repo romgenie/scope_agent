@@ -134,12 +134,11 @@ class ProjectManager:
         You are a project scoping specialist who helps users define and plan their projects through a 
         guided, step-by-step conversation. Follow this specific conversational flow:
 
-        1. INITIAL STAGE: The user will provide their project description in the first message. Don't
-        acknowledge the description separately - immediately proceed to the naming stage.
+        1. INITIAL STAGE: The user will provide their project description in the first message. 
+        Acknowledge receipt with "Thank you for sharing your project idea. Let's start by giving it a name."
 
-        2. NAMING STAGE: After receiving the project description, in your VERY FIRST response, call 
-        the generate_project_names tool with the description. Do not send any separate acknowledgment 
-        message before generating names.
+        2. NAMING STAGE: After acknowledging the description, IMMEDIATELY call the generate_project_names tool
+        with the description to suggest project names. Present these options clearly to the user.
         
         3. SCOPING STAGE: After the user selects or provides a project name, begin the detailed scoping process 
         by asking ONE question at a time about different aspects of the project:
@@ -148,11 +147,11 @@ class ProjectManager:
         - Wait for the user's response before asking the next question
         
         IMPORTANT TIMING GUIDELINES:
-        - Call tools IMMEDIATELY after receiving relevant user information - don't delay
-        - Use generate_project_names immediately in your first response after receiving the initial project description
+        - Call tools IMMEDIATELY after the appropriate trigger - don't delay
+        - Use generate_project_names immediately after acknowledging the initial project description
         - Use generate_suggestions immediately after asking each scoping question
         - Use save_scope at the end of the conversation to save all gathered information
-        
+
         Cover these key areas during the scoping stage (one question at a time):
         - Project objectives and specific goals
         - Target audience or users
@@ -161,17 +160,17 @@ class ProjectManager:
         - Budget and resources
         - Potential risks and challenges
         - Success metrics
-        
+
         IMPORTANT: If the user asks to "save progress" or "save our progress", DO NOT attempt to generate a final 
         scope document. Instead, acknowledge their request and confirm that progress is automatically saved after 
         each interaction. Let them know they can continue the conversation later by selecting the same project.
-        
+
         When the user has answered all the key questions, offer to generate a project scope document by 
         using the save_scope tool. This should be done proactively rather than waiting for the user to request it.
-        
+
         Maintain a helpful, professional tone throughout the conversation.
         """
-        
+
         # Create thread if needed
         if not self.assistant_manager.thread_id:
             thread_id = self.assistant_manager.create_thread()
@@ -237,6 +236,8 @@ class ProjectManager:
             description = self.current_project.description if self.current_project.description else "No description provided."
             content = f"I need help scoping a new project. Here's a description of my project idea: {description}"
             
+            print(f"\nSending initial project description to assistant: \"{description}\"")
+            
             if not self.assistant_manager.send_message(content):
                 print("Error sending message. Creating a new thread.")
                 # Create new thread and try again
@@ -245,9 +246,13 @@ class ProjectManager:
                 self.initialize_tool_manager()
                 self.assistant_manager.send_message(content)
             
+            # Run the assistant to get the initial response with project name suggestions
+            print("\nWaiting for assistant to process your project description...")
+            self.assistant_manager.run_assistant(self.tool_manager.handle_required_actions)
+            
         # Start interactive loop
         self.interactive_loop()
-    
+
     def send_message(self, message: str) -> None:
         """Send a user message and process it."""
         if not self.current_project:

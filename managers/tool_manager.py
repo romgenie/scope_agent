@@ -142,12 +142,8 @@ class ToolManager:
             if self.on_project_names_generated:
                 self.on_project_names_generated(request.suggestions)
             
-            # Display the suggestions to the user
-            print("\nSuggested Project Names:")
-            for i, suggestion in enumerate(self.current_suggestions, 1):
-                print(f"{i}. {suggestion.text}")
-            if request.allow_custom_input:
-                print("\nOr enter your own project name.")
+            # Don't print suggestions directly - let the assistant handle the display
+            # The UI will get these from the assistant's response
             
             # Create response
             return SuggestionResponse(
@@ -162,7 +158,7 @@ class ToolManager:
                 rendered=False,
                 num_suggestions=0
             )
-    
+
     def _handle_generate_suggestions(self, function_args: Dict[str, Any]) -> SuggestionResponse:
         """Handle the generate_suggestions tool call."""
         try:
@@ -177,15 +173,8 @@ class ToolManager:
             if self.on_suggestions_generated:
                 self.on_suggestions_generated(request.suggestions, request.category)
             
-            # Display the suggestions to the user
-            print(f"\nSuggestions for {self.current_suggestion_category}:")
-            for i, suggestion in enumerate(self.current_suggestions, 1):
-                print(f"{i}. {suggestion.text}")
-                if suggestion.description:
-                    print(f"   {suggestion.description}")
-            
-            if request.allow_custom_input:
-                print("\nOr enter your own response.")
+            # Don't print suggestions directly - let the assistant handle the display
+            # The UI will get these from the assistant's response
             
             # Create response
             return SuggestionResponse(
@@ -200,6 +189,8 @@ class ToolManager:
                 rendered=False,
                 num_suggestions=0
             )
+
+
     
     def clear_suggestions(self) -> None:
         """Clear current suggestions."""

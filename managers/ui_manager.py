@@ -21,7 +21,14 @@ class UIManager:
         """Display welcome message."""
         print("\n\n" + "="*50)
         print("   PROJECT SCOPING ASSISTANT")
-        print("="*50 + "\n")
+        print("="*50)
+        print("\nWelcome! This assistant will help you define and plan your project")
+        print("through an interactive conversation.")
+        print("\nAvailable commands:")
+        print("  - 'exit' or 'quit': End the session")
+        print("  - 'save progress': Save current progress")
+        print("  - 'history': Show conversation history")
+        print("\n")
     
     def display_project_info(self, project: ProjectData) -> None:
         """Display information about the current project."""
@@ -114,9 +121,11 @@ class UIManager:
     def new_project_prompt(self) -> str:
         """Prompt for new project description and return it."""
         print("\n=== Creating New Project ===")
-        print("\nPlease provide a brief description of your project:")
+        print("\nPlease provide a brief description of your project.")
+        print("This will help me understand what you want to build.")
+        print("Example: 'A mobile app for tracking daily expenses' or 'An e-commerce website for selling handmade crafts'")
         try:
-            description = input("> ")
+            description = input("\n> ")
             return description
         except KeyboardInterrupt:
             print("\nExiting application.")
@@ -126,28 +135,34 @@ class UIManager:
     
     def display_suggestions(self, suggestions: List[SuggestionItem], category: str, allow_custom: bool = True) -> None:
         """Display a list of suggestions to the user."""
-        if category == "project_name":
-            print("\nSuggested Project Names:")
-        else:
-            print(f"\nSuggestions for {category}:")
-            
+        print(f"\n📌 {category.title()} Options:")
+        
         for i, suggestion in enumerate(suggestions, 1):
-            print(f"{i}. {suggestion.text}")
+            print(f"\n{i}. {suggestion.text}")
             if suggestion.description:
-                print(f"   {suggestion.description}")
+                print(f"   ▪ {suggestion.description}")
         
         if allow_custom:
-            if category == "project_name":
-                print("\nOr enter your own project name.")
-            else:
-                print("\nOr enter your own response.")
+            print(f"\nEnter 1-{len(suggestions)} to select an option, or type your own {category}.")
     
-    def get_user_input(self, prompt: str = "Your response (or 'exit' to end): ") -> str:
+    def get_user_input(self, prompt: str = "Your input (or type 'help' for commands): ") -> str:
         """Get input from the user with standard commands."""
         try:
-            user_input = input(f"\n{prompt}")
+            # Show context-aware prompt based on stage
+            if self.current_project and self.current_project.stage == "initial":
+                print("\nℹ️  Tell me about your project ideas and goals. I'll guide you through the scoping process.")
+            
+            user_input = input(f"\n> ")
             
             # Handle special commands
+            if user_input.lower() == "help":
+                print("\nAvailable commands:")
+                print("  - 'exit' or 'quit': End the session")
+                print("  - 'save progress': Save current progress")
+                print("  - 'history': Show conversation history")
+                print("  - 'help': Show this help message")
+                return "help"
+                
             if user_input.lower() in ["exit", "quit", "bye"]:
                 print("\n--- Project Scoping Conversation Ended ---")
                 if self.on_exit:
@@ -168,6 +183,7 @@ class UIManager:
             
             # Regular input - call callback and return
             if self.on_message_sent:
+                print("\n⏳ Processing your response...")
                 self.on_message_sent(user_input)
             
             return user_input

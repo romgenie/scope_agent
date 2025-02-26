@@ -217,10 +217,7 @@ class ProjectManager:
                 self.current_project.thread_id = thread_id
                 self.initialize_tool_manager()
                 self.assistant_manager.send_message(content)
-        
-        # Run the assistant
-        self.assistant_manager.run_assistant(self.tool_manager.handle_required_actions)
-        
+            
         # Start interactive loop
         self.interactive_loop()
     
@@ -230,8 +227,6 @@ class ProjectManager:
             print("Error: No active project.")
             return
             
-        # Special command handling was moved to UIManager
-        
         # Process the message for suggestion selection
         processed_message = self.process_suggestion_input(message)
         
@@ -247,11 +242,11 @@ class ProjectManager:
         if self.tool_manager:
             self.tool_manager.clear_suggestions()
         
-        # Run the assistant
-        self.assistant_manager.run_assistant(self.tool_manager.handle_required_actions)
-        
         # Save after each interaction
         self.save_project()
+        
+        # Run the assistant to process the message
+        self.assistant_manager.run_assistant(self.tool_manager.handle_required_actions)
     
     def interactive_loop(self) -> None:
         """Run the interactive conversation loop."""

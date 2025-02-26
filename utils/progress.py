@@ -1,19 +1,48 @@
 # utils/progress.py
+import sys
+import threading
+import itertools
+import time
+
 class ProgressIndicator:
-    """Static progress indicator that doesn't cause blinking."""
+    """Animated progress indicator for console applications."""
+    
     def __init__(self):
         self.active = False
+        self._thread = None
+        self._current_message = ""
+        self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+    
+    def _animate(self):
+        """Animation loop that runs in a separate thread."""
+        while self.active:
+            if self._current_message:
+                sys.stdout.write(f'\r{next(self.spinner)} {self._current_message}')
+                sys.stdout.flush()
+                time.sleep(0.1)
     
     def start(self, message="Working"):
-        """Display a static progress message without animation."""
-        self.active = True
-        print(f"\n{message}")
+        """Start the progress indicator with an initial message."""
+        if not self.active:
+            self.active = True
+            self._current_message = message
+            print()  # Start on a new line
+            self._thread = threading.Thread(target=self._animate)
+            self._thread.daemon = True
+            self._thread.start()
     
     def update(self, message):
-        """Update the progress message if needed."""
+        """Update the progress message."""
         if self.active:
-            print(f"{message}")
+            self._current_message = message
+            sys.stdout.write('\r' + ' ' * (len(self._current_message) + 2))  # Clear line
+            sys.stdout.flush()
     
     def stop(self):
         """Stop the progress indicator."""
-        self.active = False
+        if self.active:
+            self.active = False
+            if self._thread:
+                self._thread.join()
+            sys.stdout.write('\r' + ' ' * (len(self._current_message) + 2) + '\r')  # Clear line
+            sys.stdout.flush()

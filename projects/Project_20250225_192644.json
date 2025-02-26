@@ -1,0 +1,54 @@
+{
+  "name": "Project_20250225_192644",
+  "created_at": "2025-02-25 19:26:44",
+  "last_modified": "2025-02-25 19:35:14",
+  "status": "new",
+  "stage": "initial",
+  "assistant_id": "asst_salCXW1CQtGWqdjJ5ZOLS49q",
+  "thread_id": "thread_mNiouNqS1kr53d1MAVYFZ81e",
+  "scope": {},
+  "description": "an agent scoping project",
+  "interaction_history": {
+    "interactions": [
+      {
+        "timestamp": "2025-02-25 19:29:38",
+        "question": ".",
+        "category": null,
+        "suggestions": [],
+        "selection": null,
+        "selection_id": null,
+        "custom_input": "all 3 options ",
+        "is_custom": true
+      },
+      {
+        "timestamp": "2025-02-25 19:30:52",
+        "question": ".",
+        "category": "objective",
+        "suggestions": [
+          {
+            "id": "db453748-a6aa-4aef-80cc-9177d4df160d",
+            "text": "Enhance agent efficiency",
+            "description": "Focus on improving the operational efficiency of agents through advanced scoping techniques.",
+            "best_practice": "Conduct time-motion studies to identify bottlenecks."
+          },
+          {
+            "id": "7606f61d-dbfe-4055-9e9d-99dc53c3a536",
+            "text": "Improve decision-making accuracy",
+            "description": "Develop systems that help agents make more informed and accurate decisions.",
+            "best_practice": "Integrate AI and data analytics tools for enhanced decision support."
+          },
+          {
+            "id": "31ee4023-f4a9-4a5c-809c-adce5c8e4657",
+            "text": "Streamline communication processes",
+            "description": "Create a more effective communication process for agents to connect with stakeholders.",
+            "best_practice": "Implement collaborative tools and define clear communication protocols."
+          }
+        ],
+        "selection": null,
+        "selection_id": null,
+        "custom_input": null,
+        "is_custom": false
+      }
+    ]
+  }
+}

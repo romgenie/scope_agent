@@ -109,7 +109,7 @@ class AssistantManager:
             return False
         
         try:
-            self.progress.start("Assistant is processing your request")
+            self.progress.start("⏳ Processing...")
             run = self.client.beta.threads.runs.create(
                 thread_id=self.thread_id,
                 assistant_id=self.assistant.id
@@ -123,9 +123,15 @@ class AssistantManager:
                     run_id=run.id
                 )
                 
-                # Only report a status once to avoid repeating messages
-                if run.status not in status_reported and run.status != "requires_action":
-                    self.progress.update(f"Assistant is {run.status}")
+                # Only report status changes, with simplified messages
+                if run.status not in status_reported:
+                    if run.status == "queued":
+                        # Skip queued status - too brief to be meaningful
+                        pass
+                    elif run.status == "in_progress":
+                        self.progress.update("⏳ Thinking...")
+                    elif run.status == "requires_action":
+                        self.progress.update("⚙️ Processing...")
                     status_reported.add(run.status)
                 
                 if run.status == "completed":
@@ -139,7 +145,7 @@ class AssistantManager:
                     status_reported = set()
                 elif run.status in ["failed", "expired", "cancelled"]:
                     self.progress.stop()
-                    print(f"Run failed with status: {run.status}")
+                    print(f"❌ Request failed: {run.status}")
                     return False
                 
                 time.sleep(0.5)

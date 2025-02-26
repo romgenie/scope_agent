@@ -1,9 +1,12 @@
+# managers/data_manager.py
 import os
 import json
 import glob
 from typing import List, Dict, Any, Optional, Union
+from datetime import datetime
 
 from models.project import ProjectData
+from models.interaction import InteractionRecord
 
 class DataManager:
     """Handles data persistence operations for projects."""
@@ -23,24 +26,26 @@ class DataManager:
             try:
                 with open(file_path, 'r') as f:
                     project_dict = json.load(f)
-                    project_data = ProjectData(**project_dict)
+                    project_data = ProjectData.model_validate(project_dict)
                     projects.append({
                         'name': project_data.name,
                         'file_path': file_path,
                         'created_at': project_data.created_at,
-                        'last_modified': project_data.last_modified
+                        'last_modified': project_data.last_modified,
+                        'completion': f"{project_data.get_completion_percentage()}%"
                     })
             except Exception as e:
                 print(f"Error loading project from {file_path}: {e}")
         
-        return projects
+        # Sort by last modified, newest first
+        return sorted(projects, key=lambda x: x['last_modified'], reverse=True)
     
     def load_project(self, file_path: str) -> Optional[ProjectData]:
         """Load a project from a file path."""
         try:
             with open(file_path, 'r') as f:
                 project_dict = json.load(f)
-                return ProjectData(**project_dict)
+                return ProjectData.model_validate(project_dict)
         except Exception as e:
             print(f"Error loading project: {e}")
             return None
@@ -87,3 +92,57 @@ class DataManager:
         # Save with new name
         file_path = self.save_project(project)
         return bool(file_path)
+    
+    def wipe_all_projects(self) -> bool:
+        """Delete all project files (for database reset)."""
+        try:
+            project_files = glob.glob(os.path.join(self.projects_dir, "*.json"))
+            for file_path in project_files:
+                os.remove(file_path)
+            return True
+        except Exception as e:
+            print(f"Error wiping projects: {e}")
+            return False
+    
+    def export_scope_document(self, project: ProjectData, format: str = "md") -> str:
+        """Export the project scope as a markdown or JSON document."""
+        if format == "json":
+            # Return the scope as JSON
+            return json.dumps(project.scope.model_dump(), indent=2)
+        else:
+            # Create a markdown document
+            md = f"# {project.name} - Project Scope Document\n\n"
+            md += f"*Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n"
+            md += f"**Project Completion: {project.get_completion_percentage()}%**\n\n"
+            
+            if project.description:
+                md += "## Project Description\n\n"
+                md += f"{project.description}\n\n"
+            
+            # Add each completed category
+            categories = [
+                ("Project Objectives", project.scope.objective),
+                ("Target Audience", project.scope.audience),
+                ("Deliverables", project.scope.deliverable),
+                ("Timeline", project.scope.timeline),
+                ("Resources", project.scope.resource),
+                ("Risks", project.scope.risk),
+                ("Success Metrics", project.scope.success_metric)
+            ]
+            
+            for title, category in categories:
+                if category.is_complete():
+                    md += f"## {title}\n\n"
+                    md += f"{category.value}\n\n"
+                    if category.description:
+                        md += f"*{category.description}*\n\n"
+            
+            # Add any additional categories
+            for key, category in project.scope.additional_categories.items():
+                if category.is_complete():
+                    md += f"## {key.replace('_', ' ').title()}\n\n"
+                    md += f"{category.value}\n\n"
+                    if category.description:
+                        md += f"*{category.description}*\n\n"
+            
+            return md

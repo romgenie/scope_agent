@@ -74,14 +74,6 @@ class ProjectManager:
         self.ui_manager.current_project = project_data
         self.ui_manager.display_project_info(project_data)
         
-        # If we have interactions, set project stage to scoping
-        if (self.current_project.interaction_history and 
-            len(self.current_project.interaction_history.interactions) > 0):
-            # Fix for projects that have interactions but are still in initial stage
-            if self.current_project.stage == "initial":
-                self.current_project.stage = "scoping"
-                print(f"[System] Updated project stage to {self.current_project.stage} based on existing interactions.")
-        
         # Set up assistant with existing IDs if available
         if self.current_project.assistant_id:
             if not self.assistant_manager.get_assistant(self.current_project.assistant_id):
@@ -108,7 +100,34 @@ class ProjectManager:
         
         # Save project with updated IDs
         self.save_project()
-    
+
+    def display_project_info(self, project: ProjectData) -> None:
+        """Display enhanced information about the current project."""
+        print("\n" + "="*50)
+        print(f"   PROJECT: {project.name}")
+        print("="*50)
+        
+        print(f"Status: {project.status}")
+        print(f"Stage: {project.stage}")
+        print(f"Completion: {project.get_completion_percentage()}%")
+        
+        if project.description:
+            print("\nDescription:")
+            print(f"  {project.description}")
+        
+        # Show category completion status
+        if project.scope:
+            status = project.scope.get_completion_status()
+            print("\nScope Categories:")
+            for category, status in status.items():
+                icon = "✓" if status == "completed" else "○"
+                category_name = category.replace("_", " ").title()
+                print(f"  {icon} {category_name}")
+        
+        print("\nCreated: " + project.created_at)
+        print("Last Modified: " + project.last_modified)
+        print("="*50 + "\n")
+
     def setup_assistant(self) -> None:
         """Set up the assistant with appropriate instructions and tools."""
         instructions = """
@@ -200,23 +219,12 @@ class ProjectManager:
         # Cancel any active runs before starting
         self.assistant_manager.cancel_active_runs()
         
-        # Check for existing interactions to determine if we should be in scoping stage
-        has_interactions = (self.current_project.interaction_history and 
-                           len(self.current_project.interaction_history.interactions) > 0)
-        
-        # If project has interactions, ensure it's in scoping stage
-        if has_interactions and self.current_project.stage == "initial":
-            self.current_project.stage = "scoping"
-            print(f"[System] Updated project stage to {self.current_project.stage} based on existing interactions.")
-            self.save_project()
-        
-        # Different approach based on project stage and interactions
-        if (self.current_project.stage in ['scoping', 'complete'] and 
-            self.current_project.name):
+        # Different approach based on project stage
+        if self.current_project.stage in ['scoping', 'complete'] and self.current_project.name:
             print(f"Continuing project: {self.current_project.name}")
             
             # Continue existing project
-            content = f"We're continuing work on the project named '{self.current_project.name}'. Please continue from where we left off in the scoping process. Look at our previous messages to see what we've already discussed."
+            content = f"We're continuing work on the project named '{self.current_project.name}'. Please continue from where we left off in the scoping process."
             if not self.assistant_manager.send_message(content):
                 print("Error sending message. Creating a new thread.")
                 # Create new thread and try again
@@ -244,11 +252,6 @@ class ProjectManager:
         """Send a user message and process it."""
         if not self.current_project:
             print("Error: No active project.")
-            return
-        
-        # Handle empty messages
-        if not message or message.strip() == "":
-            print("Error: Cannot send empty message. Please type something.")
             return
             
         # Process the message for suggestion selection
@@ -313,26 +316,17 @@ class ProjectManager:
                     is_custom=False
                 )
                 
-                # Handle project name selection
-                if self.tool_manager.current_suggestion_category == "project_name" and self.current_project:
-                    # Remove quotes if present
-                    project_name = selected.text.strip('"\'')
-                    self.update_project_name(project_name)
-                
                 return selected.text
         except ValueError:
             pass
         
-        # Handle project name input
-        if self.tool_manager.current_suggestion_category == "project_name" and self.current_project:
-            project_name = user_input.strip('"\'')
-            if project_name:
-                self.update_project_name(project_name)
-        
         # Record as custom input
         self.record_user_response(custom_input=user_input, is_custom=True)
         return user_input
-    
+
+
+
+
     def update_project_name(self, name: str) -> None:
         """Update the project name and save changes."""
         if not self.current_project:
@@ -383,41 +377,73 @@ class ProjectManager:
         """Handle when project name suggestions are generated."""
         # UI display is handled by tool manager directly
         pass
-    
+
     def extract_assistant_question(self, message: str) -> str:
-        """Extract the main question from an assistant message."""
-        # Simple extraction - get the last sentence ending with a question mark
+        """Extract the main question from an assistant message with improved accuracy."""
+        # First, check for question marks
         sentences = message.split('.')
         questions = [s.strip() + '.' for s in sentences if '?' in s]
         
         if questions:
             return questions[-1]  # Return the last question
         
-        # If no question mark, just return the last sentence
-        if sentences:
-            return sentences[-1].strip() + '.'
+        # If no question mark, look for common question patterns
+        patterns = [
+            "What", "How", "Could you", "Would you", "Can you", 
+            "Please tell me", "Please share", "I'd like to know"
+        ]
         
-        return message  # Fallback
-    
+        for pattern in patterns:
+            if pattern in message:
+                # Find the sentence containing the pattern
+                for sentence in sentences:
+                    if pattern in sentence:
+                        return sentence.strip() + '.'
+        
+        # If all else fails, return the last sentence if it's not empty
+        if sentences:
+            last_sentence = sentences[-1].strip()
+            if last_sentence:
+                return last_sentence + '.'
+        
+        # Fallback with context
+        return f"Request for information about {self.tool_manager.current_suggestion_category if self.tool_manager else 'the project'}"
+
+
+
     def handle_assistant_message(self, message: str) -> None:
-        """Handle a message received from the assistant."""
+        """Handle a message received from the assistant with improved context capture."""
         if not self.current_project:
             return
         
         # Extract and record the question
         question = self.extract_assistant_question(message)
+        
+        # Get additional context about where we are in the process
+        context = None
+        if self.tool_manager and self.tool_manager.current_suggestion_category:
+            context = f"Question about {self.tool_manager.current_suggestion_category.replace('_', ' ')}"
+        
         self.record_assistant_question(
             question=question,
-            category=self.tool_manager.current_suggestion_category if self.tool_manager else None
+            category=self.tool_manager.current_suggestion_category if self.tool_manager else None,
+            context=context
         )
-    
+
+
+
+
+
+
     def handle_run_completed(self, run: Any) -> None:
         """Handle when an assistant run is completed."""
         # Could log run information or update project status
         pass
     
-    def record_assistant_question(self, question: str, category: Optional[str] = None) -> None:
-        """Record a question asked by the assistant."""
+
+
+    def record_assistant_question(self, question: str, category: Optional[str] = None, context: Optional[str] = None) -> None:
+        """Record a question asked by the assistant with additional context."""
         if not self.current_project or not self.current_project.interaction_history:
             return
         
@@ -425,6 +451,7 @@ class ProjectManager:
         interaction = InteractionRecord(
             question=question,
             category=category,
+            context=context,
             suggestions=self.tool_manager.current_suggestions.copy() if self.tool_manager else []
         )
         
@@ -434,12 +461,12 @@ class ProjectManager:
         
         # Save project
         self.save_project()
-    
+
     def record_user_response(self, selection_text: Optional[str] = None, 
-                           selection_id: Optional[str] = None,
-                           custom_input: Optional[str] = None,
-                           is_custom: bool = False) -> None:
-        """Record a user's response to a question."""
+                        selection_id: Optional[str] = None,
+                        custom_input: Optional[str] = None,
+                        is_custom: bool = False) -> None:
+        """Record a user's response to a question and update the scope."""
         if not self.current_project or not self.current_project.interaction_history:
             return
         
@@ -453,9 +480,24 @@ class ProjectManager:
                 is_custom=is_custom
             )
             
+            # Get the updated interaction
+            interaction = self.current_project.interaction_history.interactions[self.latest_interaction_index]
+            
+            # Update the scope based on this interaction
+            category = interaction.category
+            if category:
+                self.current_project.update_category_from_interaction(category, interaction)
+                
             # Save the project
             self.save_project()
-    
+
+
+
+
+ 
+
+
+
     def cleanup(self) -> None:
         """Clean up resources before exiting."""
         if self.current_project:

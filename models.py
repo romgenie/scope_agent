@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 import uuid
 from typing import List, Dict, Any, Optional, Union, Literal
@@ -65,7 +67,16 @@ class ProjectData(BaseModel):
     thread_id: Optional[str] = None
     scope: Dict[str, Any] = Field(default_factory=dict)
     description: Optional[str] = None
-    interaction_history: InteractionHistory = Field(default_factory=InteractionHistory)
+    # Change annotation for interaction_history to string literal
+    interaction_history: "InteractionHistory" = Field(default_factory=InteractionHistory)
     
     class Config:
         validate_assignment = True
+
+    @classmethod
+    def model_rebuild(cls):
+        # Call the built-in update of forward refs in Pydantic v2
+        super().model_rebuild()
+
+# Ensure to call model_rebuild after defining the class
+ProjectData.model_rebuild()

@@ -1,10 +1,8 @@
 # models/project.py
 from datetime import datetime
-import uuid
-from typing import List, Dict, Any, Optional, Union, Literal, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Union, Literal, TYPE_CHECKING, Annotated
 from pydantic import BaseModel, Field
 
-# Use TYPE_CHECKING to avoid circular import at runtime
 if TYPE_CHECKING:
     from models.interaction import InteractionHistory
 
@@ -34,3 +32,6 @@ class ProjectData(BaseModel):
     def update_last_modified(self) -> None:
         """Update the last modified timestamp."""
         self.last_modified = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+from models.interaction import InteractionHistory
+ProjectData.model_rebuild()
